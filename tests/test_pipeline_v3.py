@@ -288,6 +288,30 @@ class PipelineV3Tests(unittest.TestCase):
         self.assertEqual(1, len(report.items_by_source["grounding"]))
         self.assertEqual("2026-08-01", report.items_by_source["grounding"][0].published_at)
 
+    def test_explicit_specstream_enables_grounding_on_native_host(self):
+        response = {"data": {"sources": [{
+            "url": "https://example.com/update",
+            "title": "Test topic update",
+            "snippet": "New evidence about test topic",
+            "published": "2026-08-01",
+        }]}}
+        with patch("lib.grounding.http.request", return_value=response):
+            report = pipeline.run(
+                topic="test topic",
+                config={
+                    "LAST30DAYS_REASONING_PROVIDER": "auto",
+                    "LAST30DAYS_NATIVE_SEARCH": "1",
+                    "SPECSTREAM_API_KEY": "test-key",
+                },
+                depth="quick",
+                requested_sources=["grounding"],
+                web_backend="specstream",
+                as_of_date="2026-08-26",
+            )
+        self.assertNotIn("grounding", report.errors_by_source)
+        self.assertEqual(1, len(report.items_by_source["grounding"]))
+        self.assertEqual("2026-08-01", report.items_by_source["grounding"][0].published_at)
+
     def test_hiring_signals_mode_enables_jobs_source_in_mock_run(self):
         report = pipeline.run(
             topic="Listen Labs",

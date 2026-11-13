@@ -321,6 +321,70 @@ class ParallelSearchTests(unittest.TestCase):
             self.assertEqual(0, artifact["resultCount"])
 
 
+class SpecStreamSearchTests(unittest.TestCase):
+    def test_specstream_search_maps_sources_and_filters_known_dates(self):
+        mock_response = {
+            "data": {
+                "kind": "list",
+                "sources": [
+                    {
+                        "title": "SpecStream Result",
+                        "url": "https://example.com/specstream",
+                        "snippet": "A snippet",
+                        "published": "2026-03-10T08:00:00Z",
+                    },
+                    {
+                        "title": "Old SpecStream Result",
+                        "url": "https://example.com/old-specstream",
+                        "snippet": "Should be filtered",
+                        "published": "2025-12-01",
+                    },
+                    {
+                        "title": "Undated SpecStream Result",
+                        "url": "https://example.com/undated-specstream",
+                        "snippet": "Kept for normalize to judge",
+                        "published": None,
+                    },
+                    {"title": "No URL", "snippet": "Dropped"},
+                ],
+            }
+        }
+        with patch("lib.grounding.http.request", return_value=mock_response) as mock_req:
+            items, artifact = grounding.specstream_search(
+                "agent runtimes", ("2026-02-25", "2026-03-27"), "fake-specstream-key"
+            )
+        self.assertEqual(2, len(items))
+        self.assertEqual("SpecStream Result", items[0]["title"])
+        self.assertEqual("https://example.com/specstream", items[0]["url"])
+        self.assertEqual("example.com", items[0]["source_domain"])
+        self.assertEqual("2026-03-10", items[0]["date"])
+        self.assertTrue(items[0]["id"].startswith("WS"))
+        self.assertEqual("Undated SpecStream Result", items[1]["title"])
+        self.assertIsNone(items[1]["date"])
+        # No server-side window: an undated result must not claim one.
+        self.assertEqual("client_filter", items[1]["metadata"]["date_window_basis"])
+        self.assertEqual("specstream", artifact["label"])
+        self.assertEqual(2, artifact["resultCount"])
+        self.assertEqual("GET", mock_req.call_args.args[0])
+        self.assertEqual(
+            "https://api.specstream.ai/v1/web-search?q=agent+runtimes&num=5&speed=fast",
+            mock_req.call_args.args[1],
+        )
+        self.assertEqual(
+            "Bearer fake-specstream-key",
+            mock_req.call_args.kwargs["headers"]["Authorization"],
+        )
+
+    def test_specstream_search_returns_empty_for_no_sources(self):
+        for response in ({"data": {"sources": []}}, {"data": None}, {}):
+            with patch("lib.grounding.http.request", return_value=response):
+                items, artifact = grounding.specstream_search(
+                    "test", ("2026-02-25", "2026-03-27"), "key"
+                )
+            self.assertEqual([], items)
+            self.assertEqual(0, artifact["resultCount"])
+
+
 class WebSearchDispatchTests(unittest.TestCase):
     def test_auto_selects_brave_when_key_present(self):
         config = {"BRAVE_API_KEY": "test-key"}
@@ -417,6 +481,24 @@ class WebSearchDispatchTests(unittest.TestCase):
     def test_explicit_parallel_without_key_raises(self):
         with self.assertRaises(RuntimeError):
             grounding.web_search("test", ("2026-02-25", "2026-03-27"), {}, backend="parallel")
+
+    def test_explicit_specstream_without_key_raises(self):
+        with self.assertRaises(RuntimeError):
+            grounding.web_search("test", ("2026-02-25", "2026-03-27"), {}, backend="specstream")
+
+    def test_explicit_specstream_uses_its_key(self):
+        config = {"SPECSTREAM_API_KEY": "test-key"}
+        with patch("lib.grounding.specstream_search", return_value=([], {})) as mock:
+            grounding.web_search("test", ("2026-02-25", "2026-03-27"), config, backend="specstream")
+        mock.assert_called_once_with("test", ("2026-02-25", "2026-03-27"), "test-key")
+
+    def test_auto_never_selects_specstream_from_a_stored_key(self):
+        config = {"SPECSTREAM_API_KEY": "test-key"}
+        self.assertIsNone(grounding.configured_backend(config))
+        with patch("lib.grounding.specstream_search") as specstream, \
+             patch("lib.grounding.web_search_keyless.keyless_search", return_value=([], {})):
+            grounding.web_search("test", ("2026-02-25", "2026-03-27"), config, backend="auto")
+        specstream.assert_not_called()
 
     def test_unsupported_backend_raises(self):
         with self.assertRaises(ValueError):

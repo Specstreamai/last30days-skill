@@ -218,6 +218,51 @@ def parallel_search(
     return items, artifact
 
 
+# ---------------------------------------------------------------------------
+# SpecStream Search API
+# ---------------------------------------------------------------------------
+
+def specstream_search(
+    query: str, date_range: tuple[str, str], api_key: str, count: int = 5,
+) -> tuple[list[dict], dict]:
+    # The API takes no date bounds, so the window is applied here to the
+    # publish date a page states. "client_filter" tells normalize that an
+    # undated result carries no server-side window guarantee.
+    endpoint = (
+        "https://api.specstream.ai/v1/web-search?"
+        + urllib.parse.urlencode({"q": query, "num": count, "speed": "fast"})
+    )
+    data = http.request(
+        "GET", endpoint, headers={"Authorization": f"Bearer {api_key}"}, timeout=15,
+    )
+    page = data.get("data")
+    sources = page.get("sources") if isinstance(page, dict) else None
+    items = []
+    for i, r in enumerate((sources or [])[:count]):
+        if not isinstance(r, dict):
+            continue
+        url = r.get("url", "")
+        if not url:
+            continue
+        raw_date = r.get("published") or ""
+        pub_date = _normalize_date(raw_date[:10]) if raw_date else None
+        if _known_date_out_of_range(pub_date, date_range):
+            continue
+        items.append({
+            "id": f"WS{i + 1}",
+            "title": r.get("title", ""),
+            "url": url,
+            "source_domain": _domain(url),
+            "snippet": (r.get("snippet") or "")[:500],
+            "date": pub_date,
+            "relevance": 0.8,
+            "why_relevant": "SpecStream web search",
+            "metadata": {"date_window_basis": "client_filter"},
+        })
+    artifact = {"label": "specstream", "webSearchQueries": [query], "resultCount": len(items)}
+    return items, artifact
+
+
 _SERPER_RELATIVE_RE = re.compile(
     r"^(?:about\s+)?(\d+)\s+(minute|min|hour|hr|day|week|month|year)s?\s+ago$", re.I
 )
@@ -344,6 +389,13 @@ def web_search(
         items, artifact = parallel_mcp.search(
             query, date_range, config.get("PARALLEL_API_KEY")
         )
+    elif backend == "specstream":
+        # Explicit opt-in only: SPECSTREAM_API_KEY is deliberately absent from
+        # configured_backend, so a stored key never routes an auto run here.
+        key = config.get("SPECSTREAM_API_KEY")
+        if not key:
+            raise RuntimeError("SPECSTREAM_API_KEY is required when web_backend='specstream'")
+        items, artifact = specstream_search(query, date_range, key)
     elif backend == "keyless":
         items, artifact = web_search_keyless.keyless_search(query, date_range, config)
     elif backend != "none":

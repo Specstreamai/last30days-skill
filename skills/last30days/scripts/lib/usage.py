@@ -24,6 +24,7 @@ _PAID_HOSTS = {
     "api.exa.ai": "exa",
     "google.serper.dev": "serper",
     "api.parallel.ai": "parallel",
+    "api.specstream.ai": "specstream",
     "api.x.com": "x",
     "api.twitter.com": "x",
     "xquik.com": "xquik",
